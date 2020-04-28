@@ -6,8 +6,7 @@ static bool g_bClientBossWeighDownForce[TF_MAXPLAYERS+1];
 static float g_flClientBossWeighDownTimer[TF_MAXPLAYERS+1];
 static float g_flClientBossRageMusicVolume[TF_MAXPLAYERS+1];
 
-static Handle g_hClientBossModelTimer[TF_MAXPLAYERS+1];
-static Handle g_hClientBossRageMusicTime[TF_MAXPLAYERS+1];
+static ArrayList g_aClientBossTimers[TF_MAXPLAYERS+1];
 
 methodmap SaxtonHaleBoss < SaxtonHaleBase
 {
@@ -41,7 +40,6 @@ methodmap SaxtonHaleBoss < SaxtonHaleBase
 		g_bClientBossWeighDownForce[this.iClient] = false;
 		g_flClientBossWeighDownTimer[this.iClient] = 0.0;
 		g_flClientBossRageMusicVolume[this.iClient] = 0.0;
-		g_hClientBossRageMusicTime[this.iClient] = null;
 		
 		//Call boss's constructor function
 		if (this.StartFunction(type, type))
@@ -50,11 +48,8 @@ methodmap SaxtonHaleBoss < SaxtonHaleBase
 			Call_Finish();
 		}
 		
-		if (g_hClientBossModelTimer[this.iClient] != null)
-			delete g_hClientBossModelTimer[this.iClient];
-		
 		if (this.bModel)
-			g_hClientBossModelTimer[this.iClient] = CreateTimer(0.2, Timer_ApplyBossModel, this.iClient, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+			this.CallFunction("CreateTimer", 0.2, "SaxtonHaleBoss", "ApplyBossModel");
 		
 		if (TF2_GetPlayerClass(this.iClient) == this.nClass)
 		{
@@ -283,7 +278,7 @@ methodmap SaxtonHaleBoss < SaxtonHaleBase
 			StopSound(this.iClient, SNDCHAN_AUTO, sSound);
 			EmitSoundToAll(sSound, this.iClient, SNDCHAN_AUTO, SNDLEVEL_SCREAMING);
 			
-			g_hClientBossRageMusicTime[this.iClient] = CreateTimer((this.bSuperRage) ? flDuration : (flDuration/2.0), Timer_BossRageMusic, this);
+			this.CallFunction("CreateTimer", this.bSuperRage ? flDuration : (flDuration/2.0), "SaxtonHaleBoss", "BossRageMusic");
 			strcopy(g_sClientBossRageMusic[this.iClient], sizeof(g_sClientBossRageMusic[]), sSound);
 			g_flClientBossRageMusicVolume[this.iClient] = 1.0;
 		}
@@ -409,6 +404,71 @@ methodmap SaxtonHaleBoss < SaxtonHaleBase
 
 		return action;
 	}
+	
+	public void ApplyBossModel()
+	{
+		ApplyBossModel(this.iClient);
+		this.CallFunction("CreateTimer", 0.2, "SaxtonHaleBoss", "ApplyBossModel");
+	}
+	
+	public void BossRageMusic()
+	{
+		if (StrEmpty(g_sClientBossRageMusic[this.iClient]))
+			return;
+		
+		if (g_flClientBossRageMusicVolume[this.iClient] > 0.0)
+		{
+			//Start music fade
+			g_flClientBossRageMusicVolume[this.iClient] -= 0.1;
+			EmitSoundToAll(g_sClientBossRageMusic[this.iClient], this.iClient, SNDCHAN_AUTO, SNDLEVEL_SCREAMING, SND_CHANGEVOL, g_flClientBossRageMusicVolume[this.iClient]);
+			this.CallFunction("CreateTimer", 0.1, "SaxtonHaleBoss", "BossRageMusic");
+		}
+		else
+		{
+			//Music ends
+			g_flClientBossRageMusicVolume[this.iClient] = 0.0;
+			StopSound(this.iClient, SNDCHAN_AUTO, g_sClientBossRageMusic[this.iClient]);
+		}
+	}
+	
+	public Handle CreateTimer(float flDuration, const char[] sType, const char[] sFunction)
+	{
+		Handle hPlugin = SaxtonHale_GetPlugin(sType);
+		if (!hPlugin)
+			return null;
+		
+		char sBuffer[64];
+		Format(sBuffer, sizeof(sBuffer), "%s.%s", sType, sFunction);
+		Function func = GetFunctionByName(hPlugin, sBuffer);
+		if (func == INVALID_FUNCTION)
+			return null;
+		
+		DataPack data;
+		Handle hTimer = CreateDataTimer(flDuration, Timer_BossTimer, data);
+		data.WriteCell(this.iClient);
+		data.WriteString(sType);
+		data.WriteFunction(func);
+		
+		if (!g_aClientBossTimers[this.iClient])
+			g_aClientBossTimers[this.iClient] = new ArrayList();
+		
+		g_aClientBossTimers[this.iClient].Push(hTimer);
+		
+		return hTimer;
+	}
+	
+	public void KillTimer(Handle hTimer)
+	{
+		if (!g_aClientBossTimers[this.iClient])
+			return;
+		
+		int iPos = g_aClientBossTimers[this.iClient].FindValue(hTimer);
+		if (iPos < 0)
+			return;
+		
+		g_aClientBossTimers[this.iClient].Erase(iPos);
+		KillTimer(hTimer);
+	}
 
 	public void Destroy()
 	{
@@ -428,34 +488,40 @@ methodmap SaxtonHaleBoss < SaxtonHaleBase
 
 		if (!StrEmpty(g_sClientBossRageMusic[this.iClient]))
 			StopSound(this.iClient, SNDCHAN_AUTO, g_sClientBossRageMusic[this.iClient]);
-		g_hClientBossRageMusicTime[this.iClient] = null;
-
-		if (g_hClientBossModelTimer[this.iClient] != null)
-			delete g_hClientBossModelTimer[this.iClient];
+		
+		delete g_aClientBossTimers[this.iClient];
 	}
 };
 
-public Action Timer_ApplyBossModel(Handle hTimer, int iClient)
+public Action Timer_BossTimer(Handle hTimer, DataPack data)
 {
-	if (!SaxtonHale_IsValidBoss(iClient))
-	{
-		g_hClientBossModelTimer[iClient] = null;
-		return Plugin_Stop;
-	}
-
-	if (g_hClientBossModelTimer[iClient] != hTimer)
-	{
-		g_hClientBossModelTimer[iClient] = null;
-		return Plugin_Stop;
-	}
-
-	//Prevents plugins like model manager to override our model
-	ApplyBossModel(iClient);
+	char sType[MAX_TYPE_CHAR];
 	
-	return Plugin_Continue;
+	int iClient = data.ReadCell();
+	data.ReadString(sType, sizeof(sType));
+	Function func = data.ReadFunction();
+	
+	if (!g_aClientBossTimers[iClient])
+		return;
+	
+	int iPos = g_aClientBossTimers[iClient].FindValue(hTimer);
+	if (iPos < 0)
+		return;
+	
+	g_aClientBossTimers[iClient].Erase(iPos);
+	
+	Handle hPlugin = SaxtonHale_GetPlugin(sType);
+	if (!hPlugin)
+		return;
+	
+	Call_StartFunction(hPlugin, func);
+	Call_PushCell(iClient);
+	Call_Finish();
+	
+	return;
 }
 
-public void ApplyBossModel(int iClient)
+void ApplyBossModel(int iClient)
 {
 	SaxtonHaleBase boss = SaxtonHaleBase(iClient);
 	if (!boss.bValid) return;
@@ -465,28 +531,6 @@ public void ApplyBossModel(int iClient)
 	SetVariantString(sModel);
 	AcceptEntityInput(iClient, "SetCustomModel");
 	SetEntProp(iClient, Prop_Send, "m_bUseClassAnimations", true);
-}
-
-public Action Timer_BossRageMusic(Handle hTimer, SaxtonHaleBoss boss)
-{
-	if (hTimer != g_hClientBossRageMusicTime[boss.iClient])
-		return;
-	if (StrEmpty(g_sClientBossRageMusic[boss.iClient]))
-		return;
-	
-	if (g_flClientBossRageMusicVolume[boss.iClient] > 0.0)
-	{
-		//Start music fade
-		g_flClientBossRageMusicVolume[boss.iClient] -= 0.1;
-		EmitSoundToAll(g_sClientBossRageMusic[boss.iClient], boss.iClient, SNDCHAN_AUTO, SNDLEVEL_SCREAMING, SND_CHANGEVOL, g_flClientBossRageMusicVolume[boss.iClient]);
-		g_hClientBossRageMusicTime[boss.iClient] = CreateTimer(0.1, Timer_BossRageMusic, boss);
-	}
-	else
-	{
-		//Music ends
-		g_flClientBossRageMusicVolume[boss.iClient] = 0.0;
-		StopSound(boss.iClient, SNDCHAN_AUTO, g_sClientBossRageMusic[boss.iClient]);
-	}
 }
 
 public Action Crossbow_OnTouch(int iEntity, int iToucher)

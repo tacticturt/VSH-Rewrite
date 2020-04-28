@@ -628,6 +628,8 @@ public void OnPluginStart()
 	SaxtonHaleFunction("CalculateMaxHealth", ET_Single);
 	SaxtonHaleFunction("AddRage", ET_Ignore, Param_Cell);
 	SaxtonHaleFunction("CreateWeapon", ET_Single, Param_Cell, Param_String, Param_Cell, Param_Cell, Param_String);
+	SaxtonHaleFunction("CreateTimer", ET_Ignore, Param_Float, Param_String, Param_String);
+	SaxtonHaleFunction("KillTimer", ET_Ignore, Param_Cell);
 	SaxtonHaleFunction("Destroy", ET_Ignore);
 	
 	//Register base constructor
